@@ -40,7 +40,7 @@ int deserialize_packet(packet_t *pkt, const unsigned char *buffer, int len) {
     uint16_t seq_net;
     uint16_t count_net;
 
-    // put the packet header into the buffer
+    // extract the packet header fields from the buffer
     memcpy(&type_net, buffer, 2);
     memcpy(&seq_net, buffer + 2, 2);
     memcpy(&count_net, buffer + 4, 2);
