@@ -12,13 +12,24 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// Max bytes in a datapacket
+/* Packet types */
+#define REQUEST 1
+#define DATA    2
+#define ACK     3
+#define EOT     4
+
+/* Maximum payload size */
 #define MAX_DATA 80
 
-int send_all(int sock, const void *buf, size_t len);
-int send_packet(int sock, uint16_t seq, uint16_t count, const char *data);
+typedef struct {
+    uint16_t type;
+    uint16_t seq;
+    uint16_t count;
+    char data[MAX_DATA];
+} packet_t;
 
-int recv_exact(int sock, void *buf, size_t len);
-int recv_packet(int sock, uint16_t *seq, uint16_t *count, char *data);
+int serialize_packet(const packet_t *pkt, unsigned char *buffer);
+
+int deserialize_packet(packet_t *pkt, const unsigned char *buffer, int len);
 
 #endif
