@@ -16,6 +16,9 @@
 /* Maximum payload size */
 #define MAX_DATA 80
 
+/* Header size */
+#define HEADER_SIZE 6
+
 typedef struct {
     uint16_t type;
     uint16_t seq;
