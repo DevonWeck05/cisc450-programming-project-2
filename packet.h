@@ -1,16 +1,11 @@
 /*
     packet.h
-    Declares the packet structure and the send/receive functions used by
-    both the client and server. Defines MAX_DATA and the interface for
-    sending and receiving packets with a 4‑byte header and variable‑length
-    data field.
  */
 
 #ifndef PACKET_H
 #define PACKET_H
 
 #include <stdint.h>
-#include <stddef.h>
 
 /* Packet types */
 #define REQUEST 1
