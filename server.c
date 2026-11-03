@@ -53,7 +53,6 @@ int main() {
         (struct sockaddr *)&client_addr, // contains the sender address
         &client_len
     );
-
     if (bytes_received < 0) {
         perror("recvfrom");
         close(sockfd);
@@ -118,7 +117,7 @@ int main() {
             exit(EXIT_FAILURE);
         }
 
-        // send data packet
+        // send data packet to address we stored earlier
         int sending_error = sendto(
             sockfd,
             send_buf,
@@ -166,6 +165,12 @@ int main() {
             fclose(fp);
             close(sockfd);
             exit(EXIT_FAILURE);
+        } else if (ack_pkt.seq != data_pkt.seq) {
+            fprintf(
+                stderr,
+                "Expected ACK %u but received ACK %u\n",
+                data_pkt.seq,
+                ack_pkt.seq);
         }
 
         printf("ACK %u received\n", ack_pkt.seq);
