@@ -132,11 +132,53 @@ int main() {
             close(sockfd);
             exit(EXIT_FAILURE);
         }
+        printf("DATA %u sent with %u data bytes\n", data_pkt.seq, data_pkt.count);
+
+        // receive ACK raw bytes
+        unsigned char ack_buffer[HEADER_SIZE + MAX_DATA];
+        int ack_bytes = recvfrom(
+            sockfd,
+            ack_buffer,
+            sizeof(ack_buffer),
+            0,
+            (struct sockaddr *)&client_addr,
+            &client_len
+        );
+        if (ack_bytes < 0) {
+            perror("recvfrom");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        // reconstruct ACK packet
+        packet_t ack_pkt;
+        if (deserialize_packet(&ack_pkt, ack_buffer, ack_bytes) < 0) {
+            fprintf(stderr, "Invalid ACK packet received\n");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        // were expecting an ACK packet
+        if (ack_pkt.type != ACK) {
+            fprintf(stderr, "Expected ACK packet\n");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        printf("ACK %u received", ack_pkt.seq);
+
+
 
         seq++;
     }
 
-    printf("Received %d bytes from client\n", bytes_received);
+    printf("Number of original data packets: n");
+    printf("Number of data-packet retransmissions: r");
+    printf("Total number of original data bytes: b");
+    printf("Number of timeouts: t");
 
     fclose(fp);
     close(sockfd);
