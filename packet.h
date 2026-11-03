@@ -9,9 +9,9 @@
 
 /* Packet types */
 #define REQUEST 1
-#define DATA    2
-#define ACK     3
-#define EOT     4
+#define DATA 2
+#define ACK 3
+#define EOT 4
 
 /* Maximum payload size */
 #define MAX_DATA 80

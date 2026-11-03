@@ -60,10 +60,43 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // Stuff will go here in steps 5 and 6 and 7
+    // turn raw bytes back into a packet
+    packet_t request_pkt;
+    if (deserialize_packet(&request_pkt, buffer, bytes_received) < 0) {
+        fprintf(stderr, "Invalid packet received\n");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
 
+    // should receive a request packet first
+    if (request_pkt.type != REQUEST) {
+        fprintf(stderr, "Expected REQUEST packet\n");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // store the filename from request packet
+    char filename[MAX_DATA + 1];
+    memcpy(filename, request_pkt.data, request_pkt.count);
+    filename[request_pkt.count] = '\0';
+
+    printf("Client requested file: %s\n", filename);
+
+    // read requested file
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL) {
+        perror("fopen");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Opened file: %s\n", filename);
+
+
+    
     printf("Received %d bytes from client\n", bytes_received);
 
+    fclose(fp);
     close(sockfd);
 
     return 0;
