@@ -92,8 +92,50 @@ int main() {
 
     printf("Opened file: %s\n", filename);
 
+    uint16_t seq = 1;
+    unsigned char send_buf[HEADER_SIZE + MAX_DATA];
 
-    
+    // start reading file line by line
+    char data_buf[MAX_DATA + 1];
+    while (fgets(data_buf, sizeof(data_buf), fp) != NULL) {
+        int data_len = strlen(data_buf);
+
+        // build data packet 
+        packet_t data_pkt;
+        data_pkt.type = DATA;
+        data_pkt.seq = seq;
+        data_pkt.count = data_len;
+        memcpy(data_pkt.data, data_buf, data_pkt.count);
+
+        printf("Created DATA packet seq=%u count=%u\n", data_pkt.seq, data_pkt.count);
+
+        // turn packet into raw bytes
+        int packet_size = serialize_packet(&data_pkt, send_buf);
+        if (packet_size < 0) {
+            fprintf(stderr, "Packet serialization failed\n");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        // send data packet
+        int sending_error = sendto(
+            sockfd,
+            send_buf,
+            packet_size,
+            0,
+            (struct sockaddr *)&client_addr,
+            client_len);
+        if (sending_error < 0) {
+            perror("sendto");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        seq++;
+    }
+
     printf("Received %d bytes from client\n", bytes_received);
 
     fclose(fp);
