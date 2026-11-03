@@ -168,9 +168,7 @@ int main() {
             exit(EXIT_FAILURE);
         }
 
-        printf("ACK %u received", ack_pkt.seq);
-
-
+        printf("ACK %u received\n", ack_pkt.seq);
 
         seq++;
     }
