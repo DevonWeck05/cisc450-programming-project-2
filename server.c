@@ -13,6 +13,7 @@
 #include <arpa/inet.h>
 
 #include "packet.h"
+#include "lossy.h"
 
 #define PORT 9000
 
@@ -21,6 +22,13 @@ int main(int argc, char **argv) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // loss simulation initialization
+    if (lossy_init(0.0, 1) < 0) {
+        perror("lossy_init");
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -97,7 +105,6 @@ int main(int argc, char **argv) {
     uint16_t window_size = 4;     // temporary hardcoded value
 
     packet_t packets[65535];
-    int packet_sizes[65535];
     int packet_count = 0;
     int retransmissions = 0;
     int timeouts = 0;
@@ -119,7 +126,6 @@ int main(int argc, char **argv) {
 
         memcpy(data_pkt.data, data_buf, data_pkt.count);
         packets[next_seq] = data_pkt;
-        packet_sizes[next_seq] = HEADER_SIZE + data_pkt.count;
 
         packet_count++;
         next_seq++;
@@ -146,14 +152,13 @@ int main(int argc, char **argv) {
             }
 
             // send packet
-            int sending_error = sendto(
+            int sending_error = lossy_sendto(
                 sockfd,
                 send_buf,
                 packet_size,
                 0,
                 (struct sockaddr *)&client_addr,
                 client_len);
-
             if (sending_error < 0) {
                 perror("sendto");
                 fclose(fp);
@@ -200,14 +205,13 @@ int main(int argc, char **argv) {
                     exit(EXIT_FAILURE);
                 }
 
-                int sending_error = sendto(
+                int sending_error = lossy_sendto(
                     sockfd,
                     send_buf,
                     packet_size,
                     0,
                     (struct sockaddr *)&client_addr,
                     client_len);
-
                 if (sending_error < 0) {
                     perror("sendto");
                     fclose(fp);
@@ -216,6 +220,7 @@ int main(int argc, char **argv) {
                 }
 
                 printf("DATA %u retransmitted with %u data bytes\n", packets[seq].seq, packets[seq].count);
+                retransmissions++;
             }
 
             continue;
@@ -264,6 +269,127 @@ int main(int argc, char **argv) {
             close(sockfd);
             exit(EXIT_FAILURE);
         }
+    }
+
+    // send EOT packet
+    packet_t eot_pkt;
+    eot_pkt.type = EOT;
+    eot_pkt.count = 0;
+    eot_pkt.seq = packet_count + 1;
+
+    int eot_size = serialize_packet(&eot_pkt, send_buf);
+
+    if (eot_size < 0) {
+        fprintf(stderr, "EOT serialization failed\n");
+        fclose(fp);
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    if (lossy_sendto(
+        sockfd,
+        send_buf,
+        eot_size,
+        0,
+        (struct sockaddr *)&client_addr,
+        client_len) < 0)
+    {
+        perror("lossy_sendto");
+        fclose(fp);
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("EOT %u sent\n", eot_pkt.seq);
+
+    int eot_acked = 0;
+
+    while (!eot_acked) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
+
+        struct timeval timeout;
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+
+        int ready = select(
+            sockfd + 1,
+            &readfds,
+            NULL,
+            NULL,
+            &timeout
+        );
+        if (ready == 0){
+            if (lossy_sendto(
+                    sockfd,
+                    send_buf,
+                    eot_size,
+                    0,
+                    (struct sockaddr *)&client_addr,
+                    client_len) < 0)
+            {
+                perror("lossy_sendto");
+                fclose(fp);
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
+
+            printf("EOT %u retransmitted\n", eot_pkt.seq);
+            timeouts++;
+
+            continue;
+        } else if (ready < 0) {
+            perror("select");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        // wait for the one EOT ACK
+        unsigned char eot_ack_buffer[HEADER_SIZE + MAX_DATA];
+
+        int eot_ack_bytes = recvfrom(
+            sockfd,
+            eot_ack_buffer,
+            sizeof(eot_ack_buffer),
+            0,
+            (struct sockaddr *)&client_addr,
+            &client_len
+        );
+
+        if (eot_ack_bytes < 0) {
+            perror("recvfrom");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        packet_t eot_ack;
+
+        if (deserialize_packet(&eot_ack, eot_ack_buffer, eot_ack_bytes) < 0) {
+            fprintf(stderr, "Invalid EOT ACK packet\n");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        if (eot_ack.type != ACK) {
+            fprintf(stderr, "Expected EOT ACK\n");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        if (eot_ack.seq != eot_pkt.seq) {
+            fprintf(stderr, "Expected EOT ACK %u but received %u\n", eot_pkt.seq, eot_ack.seq);
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        printf("EOT %u acknowledged\n", eot_pkt.seq);
+        eot_acked = 1;
     }
 
     printf("Number of original data packets: %d\n", packet_count);
