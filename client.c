@@ -1,5 +1,6 @@
 /*
-    client.c
+    client.c - requests a file over UDP, writes in-order DATA packets to out.txt,
+    and sends cumulative ACKs with reliable EOT acknowledgment.
 */
 
 #define _POSIX_C_SOURCE 200809L

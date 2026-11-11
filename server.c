@@ -1,5 +1,6 @@
 /*
-    server.c - sends requested files over UDP using Go-Back-N
+    server.c - receives a file request and sends DATA packets with a Go-Back-N
+    window, retransmission timer, and reliable EOT acknowledgment.
 */
 
 #define _POSIX_C_SOURCE 200809L

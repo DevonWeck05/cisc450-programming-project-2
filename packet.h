@@ -1,5 +1,6 @@
 /*
-    packet.h
+    packet.h - defines the packet types, six-byte header, maximum payload,
+    packet structure, and serialization function declarations.
  */
 
 #ifndef PACKET_H

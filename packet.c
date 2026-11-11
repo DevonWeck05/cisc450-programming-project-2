@@ -1,5 +1,6 @@
 /*
-    packet.c
+    packet.c - serializes packet fields in network byte order and parses
+    received packets while validating their payload length and count.
 */
 
 #include "packet.h"
