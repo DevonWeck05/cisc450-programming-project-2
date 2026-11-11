@@ -15,7 +15,7 @@
 
 #define PORT 9000
 
-int main() {
+int main(int argc, char **argv) {
     // create the UDP socket
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
@@ -91,10 +91,17 @@ int main() {
 
     printf("Opened file: %s\n", filename);
 
-    uint16_t seq = 1;
+    uint16_t base = 1;
+    uint16_t next_seq = 1;
+    uint16_t window_size = 4;     // temporary hardcoded value
+
+    packet_t packets[65535];
+    int packet_sizes[65535];
+    int packet_count = 0;
+
     unsigned char send_buf[HEADER_SIZE + MAX_DATA];
 
-    // start reading file line by line
+    // file loading loop: start reading file line by line
     char data_buf[MAX_DATA + 1];
     while (fgets(data_buf, sizeof(data_buf), fp) != NULL) {
         int data_len = strlen(data_buf);
@@ -102,39 +109,60 @@ int main() {
         // build data packet 
         packet_t data_pkt;
         data_pkt.type = DATA;
-        data_pkt.seq = seq;
+        data_pkt.seq = next_seq;
         data_pkt.count = data_len;
+
         memcpy(data_pkt.data, data_buf, data_pkt.count);
+        packets[next_seq] = data_pkt;
+        packet_sizes[next_seq] = HEADER_SIZE + data_pkt.count;
 
-        printf("Created DATA packet seq=%u count=%u\n", data_pkt.seq, data_pkt.count);
+        packet_count++;
+        next_seq++;
+    }
 
-        // turn packet into raw bytes
-        int packet_size = serialize_packet(&data_pkt, send_buf);
-        if (packet_size < 0) {
-            fprintf(stderr, "Packet serialization failed\n");
-            fclose(fp);
-            close(sockfd);
-            exit(EXIT_FAILURE);
+    // reset base and next_seq for packet sending loop
+    base = 1;
+    next_seq = 1;
+
+    // sending loop
+    while (base <= packet_count) {
+        while (
+            next_seq <= packet_count &&
+            next_seq < base + window_size
+        ) {
+            int packet_size = serialize_packet(&packets[next_seq], send_buf);
+
+            if (packet_size < 0) {
+                fprintf(stderr, "Packet serialization failed\n");
+                fclose(fp);
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
+
+            int sending_error = sendto(
+                sockfd,
+                send_buf,
+                packet_size,
+                0,
+                (struct sockaddr *)&client_addr,
+                client_len);
+
+            if (sending_error < 0) {
+                perror("sendto");
+                fclose(fp);
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
+
+            printf("DATA %u sent with %u data bytes\n",
+                packets[next_seq].seq,
+                packets[next_seq].count);
+
+            next_seq++;
         }
 
-        // send data packet to address we stored earlier
-        int sending_error = sendto(
-            sockfd,
-            send_buf,
-            packet_size,
-            0,
-            (struct sockaddr *)&client_addr,
-            client_len);
-        if (sending_error < 0) {
-            perror("sendto");
-            fclose(fp);
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
-        printf("DATA %u sent with %u data bytes\n", data_pkt.seq, data_pkt.count);
-
-        // receive ACK raw bytes
         unsigned char ack_buffer[HEADER_SIZE + MAX_DATA];
+
         int ack_bytes = recvfrom(
             sockfd,
             ack_buffer,
@@ -143,6 +171,7 @@ int main() {
             (struct sockaddr *)&client_addr,
             &client_len
         );
+
         if (ack_bytes < 0) {
             perror("recvfrom");
             fclose(fp);
@@ -150,8 +179,8 @@ int main() {
             exit(EXIT_FAILURE);
         }
 
-        // reconstruct ACK packet
         packet_t ack_pkt;
+
         if (deserialize_packet(&ack_pkt, ack_buffer, ack_bytes) < 0) {
             fprintf(stderr, "Invalid ACK packet received\n");
             fclose(fp);
@@ -159,23 +188,17 @@ int main() {
             exit(EXIT_FAILURE);
         }
 
-        // were expecting an ACK packet
         if (ack_pkt.type != ACK) {
             fprintf(stderr, "Expected ACK packet\n");
             fclose(fp);
             close(sockfd);
             exit(EXIT_FAILURE);
-        } else if (ack_pkt.seq != data_pkt.seq) {
-            fprintf(
-                stderr,
-                "Expected ACK %u but received ACK %u\n",
-                data_pkt.seq,
-                ack_pkt.seq);
         }
 
-        printf("ACK %u received\n", ack_pkt.seq);
-
-        seq++;
+        if (ack_pkt.seq >= base && ack_pkt.seq < next_seq) {
+            printf("ACK %u received\n", ack_pkt.seq);
+            base = ack_pkt.seq + 1;
+        }
     }
 
     printf("Number of original data packets: n");
