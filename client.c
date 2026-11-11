@@ -1,4 +1,7 @@
-/* Go-Back-N receiver. See CLIENT_NOTES.md for the wire contract. */
+/*
+    client.c
+*/
+
 #define _POSIX_C_SOURCE 200809L
 #include <arpa/inet.h>
 #include <errno.h>

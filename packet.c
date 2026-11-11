@@ -15,13 +15,13 @@ int serialize_packet(const packet_t *pkt, unsigned char *buffer) {
 
     // convert to network byte order
     uint16_t type_net = htons(pkt->type);
-    uint16_t seq_net = htons(pkt->seq);
     uint16_t count_net = htons(pkt->count);
+    uint16_t seq_net = htons(pkt->seq);
 
-    // put the network type, seq, andf count into the buffer
+    // put the network type, count, and seq into the buffer
     memcpy(buffer, &type_net, 2);
-    memcpy(buffer + 2, &seq_net, 2);
-    memcpy(buffer + 4, &count_net, 2);
+    memcpy(buffer + 2, &count_net, 2);
+    memcpy(buffer + 4, &seq_net, 2);
 
     // If theres data, put it in the buffer after the header
     if (pkt->count > 0) {
@@ -37,13 +37,13 @@ int deserialize_packet(packet_t *pkt, const unsigned char *buffer, int len) {
     if (len < HEADER_SIZE) return -1;
 
     uint16_t type_net;
-    uint16_t seq_net;
     uint16_t count_net;
+    uint16_t seq_net;
 
-    // extract the packet header fields from the buffer
+    // extract type, count, and seq from the buffer
     memcpy(&type_net, buffer, 2);
-    memcpy(&seq_net, buffer + 2, 2);
-    memcpy(&count_net, buffer + 4, 2);
+    memcpy(&count_net, buffer + 2, 2);
+    memcpy(&seq_net, buffer + 4, 2);
 
     // convert to host byte order and rebuild the packet
     pkt->type = ntohs(type_net);

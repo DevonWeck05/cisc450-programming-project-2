@@ -21,8 +21,8 @@
 
 typedef struct {
     uint16_t type;
-    uint16_t seq;
     uint16_t count;
+    uint16_t seq;
     char data[MAX_DATA];
 } packet_t;
 
