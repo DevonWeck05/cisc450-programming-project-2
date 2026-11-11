@@ -99,6 +99,9 @@ int main(int argc, char **argv) {
     packet_t packets[65535];
     int packet_sizes[65535];
     int packet_count = 0;
+    int retransmissions = 0;
+    int timeouts = 0;
+    int original_bytes = 0;
 
     unsigned char send_buf[HEADER_SIZE + MAX_DATA];
 
@@ -106,6 +109,7 @@ int main(int argc, char **argv) {
     char data_buf[MAX_DATA + 1];
     while (fgets(data_buf, sizeof(data_buf), fp) != NULL) {
         int data_len = strlen(data_buf);
+        original_bytes += data_len;
 
         // build data packet 
         packet_t data_pkt;
@@ -182,9 +186,37 @@ int main(int argc, char **argv) {
         );
 
         if (ready == 0) {
+            timeouts++;
             printf("Timeout for packet %u\n", base);
 
-            
+            // resend all the packets in the window that timed out
+            for (uint16_t seq = base; seq < next_seq; seq++) {
+                int packet_size = serialize_packet(&packets[seq], send_buf);
+
+                if (packet_size < 0) {
+                    fprintf(stderr, "Packet serialization failed\n");
+                    fclose(fp);
+                    close(sockfd);
+                    exit(EXIT_FAILURE);
+                }
+
+                int sending_error = sendto(
+                    sockfd,
+                    send_buf,
+                    packet_size,
+                    0,
+                    (struct sockaddr *)&client_addr,
+                    client_len);
+
+                if (sending_error < 0) {
+                    perror("sendto");
+                    fclose(fp);
+                    close(sockfd);
+                    exit(EXIT_FAILURE);
+                }
+
+                printf("DATA %u retransmitted with %u data bytes\n", packets[seq].seq, packets[seq].count);
+            }
 
             continue;
         } else if (ready > 0) {
@@ -227,19 +259,17 @@ int main(int argc, char **argv) {
                 base = ack_pkt.seq + 1;
             }
         } else if (ready < 0) {
-            if (ready < 0) {
-                perror("select");
-                fclose(fp);
-                close(sockfd);
-                exit(EXIT_FAILURE);
-            }
+            perror("select");
+            fclose(fp);
+            close(sockfd);
+            exit(EXIT_FAILURE);
         }
     }
 
-    printf("Number of original data packets: n");
-    printf("Number of data-packet retransmissions: r");
-    printf("Total number of original data bytes: b");
-    printf("Number of timeouts: t");
+    printf("Number of original data packets: %d\n", packet_count);
+    printf("Number of data-packet retransmissions: %d\n", retransmissions);
+    printf("Total number of original data bytes: %d\n", original_bytes);
+    printf("Number of timeouts: %d\n", timeouts);
 
     fclose(fp);
     close(sockfd);
