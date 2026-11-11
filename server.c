@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -126,6 +127,7 @@ int main(int argc, char **argv) {
 
     // sending loop
     while (base <= packet_count) {
+        // send all the packets we can in the window then recv ACKS
         while (
             next_seq <= packet_count &&
             next_seq < base + window_size
@@ -139,6 +141,7 @@ int main(int argc, char **argv) {
                 exit(EXIT_FAILURE);
             }
 
+            // send packet
             int sending_error = sendto(
                 sockfd,
                 send_buf,
@@ -161,43 +164,75 @@ int main(int argc, char **argv) {
             next_seq++;
         }
 
-        unsigned char ack_buffer[HEADER_SIZE + MAX_DATA];
+        // timeout
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
 
-        int ack_bytes = recvfrom(
-            sockfd,
-            ack_buffer,
-            sizeof(ack_buffer),
-            0,
-            (struct sockaddr *)&client_addr,
-            &client_len
+        struct timeval timeout;
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+
+        int ready = select(
+            sockfd + 1,
+            &readfds,
+            NULL,
+            NULL,
+            &timeout
         );
 
-        if (ack_bytes < 0) {
-            perror("recvfrom");
-            fclose(fp);
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
+        if (ready == 0) {
+            printf("Timeout for packet %u\n", base);
 
-        packet_t ack_pkt;
+            
 
-        if (deserialize_packet(&ack_pkt, ack_buffer, ack_bytes) < 0) {
-            fprintf(stderr, "Invalid ACK packet received\n");
-            fclose(fp);
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
+            continue;
+        } else if (ready > 0) {
+            // recv an ack
+            unsigned char ack_buffer[HEADER_SIZE + MAX_DATA];
+            int ack_bytes = recvfrom(
+                sockfd,
+                ack_buffer,
+                sizeof(ack_buffer),
+                0,
+                (struct sockaddr *)&client_addr,
+                &client_len
+            );
 
-        if (ack_pkt.type != ACK) {
-            fprintf(stderr, "Expected ACK packet\n");
-            fclose(fp);
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
+            if (ack_bytes < 0) {
+                perror("recvfrom");
+                fclose(fp);
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
 
-        if (ack_pkt.seq >= base && ack_pkt.seq < next_seq) {
-            printf("ACK %u received\n", ack_pkt.seq);
-            base = ack_pkt.seq + 1;
+            packet_t ack_pkt;
+            if (deserialize_packet(&ack_pkt, ack_buffer, ack_bytes) < 0) {
+                fprintf(stderr, "Invalid ACK packet received\n");
+                fclose(fp);
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
+
+            if (ack_pkt.type != ACK) {
+                fprintf(stderr, "Expected ACK packet\n");
+                fclose(fp);
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
+
+            // good ACK
+            if (ack_pkt.seq >= base && ack_pkt.seq < next_seq) {
+                printf("ACK %u received\n", ack_pkt.seq);
+                base = ack_pkt.seq + 1;
+            }
+        } else if (ready < 0) {
+            if (ready < 0) {
+                perror("select");
+                fclose(fp);
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
         }
     }
 
