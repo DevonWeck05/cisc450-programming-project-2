@@ -15,9 +15,39 @@
 #include "packet.h"
 #include "lossy.h"
 
-#define PORT 9000
-
 int main(int argc, char **argv) {
+    // command line parsing
+    if (argc != 6) {
+        fprintf(stderr,
+            "Usage: %s <port> <window-size> <timeout-ms> <data-loss-rate> <seed>\n",
+            argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    int port = atoi(argv[1]);
+    int window_size = atoi(argv[2]);
+    int timeout_ms = atoi(argv[3]);
+    double loss_rate = atof(argv[4]);
+    unsigned int seed = (unsigned int)strtoul(argv[5], NULL, 10);
+
+    if (port < 1024 || port > 65535) {
+        fprintf(stderr, "Invalid port\n");
+        return EXIT_FAILURE;
+    }
+    if (window_size < 1 || window_size > 65534) {
+        fprintf(stderr, "Invalid window size\n");
+        return EXIT_FAILURE;
+    }
+    if (timeout_ms <= 0) {
+        fprintf(stderr, "Invalid timeout\n");
+        return EXIT_FAILURE;
+    }
+    if (loss_rate < 0.0 || loss_rate >= 1.0) {
+        fprintf(stderr, "Invalid loss rate\n");
+        return EXIT_FAILURE;
+    }
+
+
     // create the UDP socket
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
@@ -26,7 +56,7 @@ int main(int argc, char **argv) {
     }
 
     // loss simulation initialization
-    if (lossy_init(0.0, 1) < 0) {
+    if (lossy_init(loss_rate, seed) < 0) {
         perror("lossy_init");
         close(sockfd);
         exit(EXIT_FAILURE);
@@ -37,7 +67,7 @@ int main(int argc, char **argv) {
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET; // IPv4
     server_addr.sin_addr.s_addr = INADDR_ANY; // Listen on all interfaces
-    server_addr.sin_port = htons(PORT); // Listen on UDP port 9000
+    server_addr.sin_port = htons(port); // Listen on UDP port
 
     // bind socket to port
     if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
@@ -102,7 +132,6 @@ int main(int argc, char **argv) {
 
     uint16_t base = 1;
     uint16_t next_seq = 1;
-    uint16_t window_size = 4;     // temporary hardcoded value
 
     packet_t packets[65535];
     int packet_count = 0;
@@ -179,8 +208,8 @@ int main(int argc, char **argv) {
         FD_SET(sockfd, &readfds);
 
         struct timeval timeout;
-        timeout.tv_sec = 1;
-        timeout.tv_usec = 0;
+        timeout.tv_sec = timeout_ms / 1000;
+        timeout.tv_usec = (timeout_ms % 1000) * 1000;
 
         int ready = select(
             sockfd + 1,
@@ -310,8 +339,8 @@ int main(int argc, char **argv) {
         FD_SET(sockfd, &readfds);
 
         struct timeval timeout;
-        timeout.tv_sec = 1;
-        timeout.tv_usec = 0;
+        timeout.tv_sec = timeout_ms / 1000;
+        timeout.tv_usec = (timeout_ms % 1000) * 1000;
 
         int ready = select(
             sockfd + 1,
