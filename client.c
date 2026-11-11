@@ -187,7 +187,11 @@ int main(int argc, char **argv) {
         packet_t pkt;
         if (deserialize_packet(&pkt, wire, (int)n) < 0) {
             // converts bytes into packet structure, and checks that attributes match
-            ++discarded;
+            continue;
+        }
+        if ((pkt.type == DATA &&
+             (pkt.count == 0 || pkt.seq == 0 || pkt.seq == UINT16_MAX)) ||
+            (pkt.type == EOT && (pkt.count != 0 || pkt.seq == 0))) {
             continue;
         }
         packet_t ack = {0};
@@ -217,13 +221,15 @@ int main(int argc, char **argv) {
                 resent_ack = 1;
             }
             ack.seq = last_ack;
-        } else if (pkt.type == EOT && pkt.count == 0) {
+        } else if (pkt.type == EOT) {
             // end of transfer, no payload
             if (!lingering && pkt.seq == expected) {
-                if (fflush(out) == EOF) {
-                    perror("fflush");
+                if (fclose(out) == EOF) {
+                    perror("fclose out.txt");
+                    out = NULL;
                     break;
                 }
+                out = NULL;
                 lingering = 1;
                 eot_seq = pkt.seq;
                 deadline = now_ms() + (2 * timeout_ms);
@@ -237,8 +243,7 @@ int main(int argc, char **argv) {
             ack.seq = eot_seq;
             // Accepted EOTs and their duplicates receive the same ACK.
         } else {
-            // other packet types are simply discarded
-            ++discarded;
+            // Other packet types do not contribute to the DATA discard count.
             continue;
         }
         if (send_packet(fd, peer->ai_addr, peer->ai_addrlen, &ack) < 0) break;
@@ -249,7 +254,7 @@ int main(int argc, char **argv) {
     printf("Number of data packets discarded: %llu\n", discarded);
     printf("Total number of data bytes written: %llu\n", bytes);
 cleanup:
-    if (fclose(out) == EOF) {
+    if (out && fclose(out) == EOF) {
         perror("fclose");
         status = EXIT_FAILURE;
     }

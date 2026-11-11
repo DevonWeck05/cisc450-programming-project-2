@@ -1,10 +1,13 @@
 /*
-    server.c
+    server.c - sends requested files over UDP using Go-Back-N
 */
 
+#define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <sys/socket.h>
@@ -14,6 +17,26 @@
 
 #include "packet.h"
 #include "lossy.h"
+
+// checks whether a packet came from the requesting client
+static int same_peer(const struct sockaddr_in *left,
+                     const struct sockaddr_in *right)
+{
+    return left->sin_family == right->sin_family &&
+           left->sin_port == right->sin_port &&
+           left->sin_addr.s_addr == right->sin_addr.s_addr;
+}
+
+// gets the current monotonic time in milliseconds
+static int monotonic_ms(long long *milliseconds)
+{
+    struct timespec current;
+    if (clock_gettime(CLOCK_MONOTONIC, &current) < 0) return -1;
+
+    *milliseconds = (long long)current.tv_sec * 1000 +
+                    current.tv_nsec / 1000000;
+    return 0;
+}
 
 int main(int argc, char **argv) {
     // command line parsing
@@ -106,9 +129,10 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
-    // should receive a request packet first
-    if (request_pkt.type != REQUEST) {
-        fprintf(stderr, "Expected REQUEST packet\n");
+    // validate the request packet before using its filename
+    if (request_pkt.type != REQUEST || request_pkt.count == 0 ||
+        request_pkt.seq != 0) {
+        fprintf(stderr, "Invalid REQUEST packet\n");
         close(sockfd);
         exit(EXIT_FAILURE);
     }
@@ -130,6 +154,7 @@ int main(int argc, char **argv) {
 
     printf("Opened file: %s\n", filename);
 
+    // initialize the sender window and transfer statistics
     uint16_t base = 1;
     uint16_t next_seq = 1;
 
@@ -138,6 +163,7 @@ int main(int argc, char **argv) {
     int retransmissions = 0;
     int timeouts = 0;
     int original_bytes = 0;
+    long long timer_deadline = 0;
 
     unsigned char send_buf[HEADER_SIZE + MAX_DATA];
 
@@ -197,17 +223,38 @@ int main(int argc, char **argv) {
 
             printf("DATA %u sent with %u data bytes\n", packets[next_seq].seq, packets[next_seq].count);
 
+            if (base == next_seq) {
+                // start the timer when the first packet enters an empty window
+                long long now;
+                if (monotonic_ms(&now) < 0) {
+                    perror("clock_gettime");
+                    fclose(fp);
+                    close(sockfd);
+                    return EXIT_FAILURE;
+                }
+                timer_deadline = now + timeout_ms;
+            }
             next_seq++;
         }
 
-        // timeout
+        long long now;
+        if (monotonic_ms(&now) < 0) {
+            perror("clock_gettime");
+            fclose(fp);
+            close(sockfd);
+            return EXIT_FAILURE;
+        }
+        // wait only for the remaining time on the base packet's timer
+        long long remaining_ms = timer_deadline - now;
+        if (remaining_ms < 0) remaining_ms = 0;
+
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(sockfd, &readfds);
 
         struct timeval timeout;
-        timeout.tv_sec = timeout_ms / 1000;
-        timeout.tv_usec = (timeout_ms % 1000) * 1000;
+        timeout.tv_sec = (time_t)(remaining_ms / 1000);
+        timeout.tv_usec = (suseconds_t)((remaining_ms % 1000) * 1000);
 
         int ready = select(
             sockfd + 1,
@@ -250,47 +297,61 @@ int main(int argc, char **argv) {
                 retransmissions++;
             }
 
+            if (monotonic_ms(&now) < 0) {
+                perror("clock_gettime");
+                fclose(fp);
+                close(sockfd);
+                return EXIT_FAILURE;
+            }
+            timer_deadline = now + timeout_ms;
             continue;
         } else if (ready > 0) {
             // recv an ack
             unsigned char ack_buffer[HEADER_SIZE + MAX_DATA];
+            struct sockaddr_in source_addr;
+            socklen_t source_len = sizeof(source_addr);
             int ack_bytes = recvfrom(
                 sockfd,
                 ack_buffer,
                 sizeof(ack_buffer),
                 0,
-                (struct sockaddr *)&client_addr,
-                &client_len
+                (struct sockaddr *)&source_addr,
+                &source_len
             );
 
             if (ack_bytes < 0) {
+                if (errno == EINTR) continue;
                 perror("recvfrom");
                 fclose(fp);
                 close(sockfd);
                 exit(EXIT_FAILURE);
             }
+            // ignore ACKs from any address other than the requesting client
+            if (!same_peer(&source_addr, &client_addr)) continue;
 
             packet_t ack_pkt;
             if (deserialize_packet(&ack_pkt, ack_buffer, ack_bytes) < 0) {
-                fprintf(stderr, "Invalid ACK packet received\n");
-                fclose(fp);
-                close(sockfd);
-                exit(EXIT_FAILURE);
+                continue;
             }
 
-            if (ack_pkt.type != ACK) {
-                fprintf(stderr, "Expected ACK packet\n");
-                fclose(fp);
-                close(sockfd);
-                exit(EXIT_FAILURE);
-            }
+            if (ack_pkt.type != ACK || ack_pkt.count != 0) continue;
 
-            // good ACK
+            // advance the window only for an ACK of a sent packet
             if (ack_pkt.seq >= base && ack_pkt.seq < next_seq) {
                 printf("ACK %u received\n", ack_pkt.seq);
                 base = ack_pkt.seq + 1;
+                if (base < next_seq) {
+                    if (monotonic_ms(&now) < 0) {
+                        perror("clock_gettime");
+                        fclose(fp);
+                        close(sockfd);
+                        return EXIT_FAILURE;
+                    }
+                    timer_deadline = now + timeout_ms;
+                }
             }
         } else if (ready < 0) {
+            if (errno == EINTR) continue;
             perror("select");
             fclose(fp);
             close(sockfd);
@@ -330,15 +391,35 @@ int main(int argc, char **argv) {
     printf("EOT %u sent\n", eot_pkt.seq);
 
     int eot_acked = 0;
+    // start a separate timer for reliable EOT delivery
+    long long eot_deadline;
+    if (monotonic_ms(&eot_deadline) < 0) {
+        perror("clock_gettime");
+        fclose(fp);
+        close(sockfd);
+        return EXIT_FAILURE;
+    }
+    eot_deadline += timeout_ms;
 
     while (!eot_acked) {
+        long long now;
+        if (monotonic_ms(&now) < 0) {
+            perror("clock_gettime");
+            fclose(fp);
+            close(sockfd);
+            return EXIT_FAILURE;
+        }
+        // wait only for the remaining time on the EOT timer
+        long long remaining_ms = eot_deadline - now;
+        if (remaining_ms < 0) remaining_ms = 0;
+
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(sockfd, &readfds);
 
         struct timeval timeout;
-        timeout.tv_sec = timeout_ms / 1000;
-        timeout.tv_usec = (timeout_ms % 1000) * 1000;
+        timeout.tv_sec = (time_t)(remaining_ms / 1000);
+        timeout.tv_usec = (suseconds_t)((remaining_ms % 1000) * 1000);
 
         int ready = select(
             sockfd + 1,
@@ -365,8 +446,16 @@ int main(int argc, char **argv) {
             printf("EOT %u retransmitted\n", eot_pkt.seq);
             timeouts++;
 
+            if (monotonic_ms(&now) < 0) {
+                perror("clock_gettime");
+                fclose(fp);
+                close(sockfd);
+                return EXIT_FAILURE;
+            }
+            eot_deadline = now + timeout_ms;
             continue;
         } else if (ready < 0) {
+            if (errno == EINTR) continue;
             perror("select");
             fclose(fp);
             close(sockfd);
@@ -375,45 +464,36 @@ int main(int argc, char **argv) {
 
         // wait for the one EOT ACK
         unsigned char eot_ack_buffer[HEADER_SIZE + MAX_DATA];
+        struct sockaddr_in source_addr;
+        socklen_t source_len = sizeof(source_addr);
 
         int eot_ack_bytes = recvfrom(
             sockfd,
             eot_ack_buffer,
             sizeof(eot_ack_buffer),
             0,
-            (struct sockaddr *)&client_addr,
-            &client_len
+            (struct sockaddr *)&source_addr,
+            &source_len
         );
 
         if (eot_ack_bytes < 0) {
+            if (errno == EINTR) continue;
             perror("recvfrom");
             fclose(fp);
             close(sockfd);
             exit(EXIT_FAILURE);
         }
+        // ignore EOT ACKs from any other source
+        if (!same_peer(&source_addr, &client_addr)) continue;
 
         packet_t eot_ack;
 
         if (deserialize_packet(&eot_ack, eot_ack_buffer, eot_ack_bytes) < 0) {
-            fprintf(stderr, "Invalid EOT ACK packet\n");
-            fclose(fp);
-            close(sockfd);
-            exit(EXIT_FAILURE);
+            continue;
         }
 
-        if (eot_ack.type != ACK) {
-            fprintf(stderr, "Expected EOT ACK\n");
-            fclose(fp);
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
-
-        if (eot_ack.seq != eot_pkt.seq) {
-            fprintf(stderr, "Expected EOT ACK %u but received %u\n", eot_pkt.seq, eot_ack.seq);
-            fclose(fp);
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
+        if (eot_ack.type != ACK || eot_ack.count != 0 ||
+            eot_ack.seq != eot_pkt.seq) continue;
 
         printf("EOT %u acknowledged\n", eot_pkt.seq);
         eot_acked = 1;
