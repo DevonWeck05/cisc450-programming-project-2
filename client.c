@@ -18,7 +18,6 @@
 #include "lossy.h"
 
 #define IDLE_MS 30000
-#define LINGER_MS 5000
 
 static long long now_ms(void)
 {
@@ -47,60 +46,57 @@ static int send_packet(int fd, const struct sockaddr *peer, socklen_t size,
     // returns 0 on success and -1 on failure
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     char filename[MAX_DATA + 2];
-    const char *host = argc > 1 ? argv[1] : "127.0.0.1";
-    const char *port = argc > 2 ? argv[2] : "9000";
-    // default values for hostname and port if they are not supplied
-    double loss = 0.0;
-    uint32_t seed = 1;
-    char *end;
-    if (argc > 6) {
-        // in the case where there are more arguments than allowed, an error is thrown
-        fprintf(stderr, "Usage: %s [host [port [filename [ack_loss [seed]]]]]\n", argv[0]);
+
+    if (argc != 6) {
+        fprintf(stderr,
+            "Usage: %s <server-host> <port> <timeout-ms> <ack-loss-rate> <seed>\n",
+            argv[0]);
         return EXIT_FAILURE;
     }
-    if (argc > 4) {
-        // only runs when the user supplies a loss argument
-        errno = 0;
-        loss = strtod(argv[4], &end);
-        if (errno || end == argv[4] || *end) {
-            fprintf(stderr, "Invalid loss rate\n");
-            return EXIT_FAILURE;
-        }
+
+    const char *host = argv[1];
+    const char *port = argv[2];
+
+    int timeout_ms = atoi(argv[3]);
+    double loss = atof(argv[4]);
+    uint32_t seed = (uint32_t)strtoul(argv[5], NULL, 10);
+
+    if (timeout_ms <= 0) {
+        fprintf(stderr, "Invalid timeout\n");
+        return EXIT_FAILURE;
     }
-    if (argc > 5) {
-        errno = 0;
-        unsigned long value = strtoul(argv[5], &end, 10);
-        if (errno || end == argv[5] || *end || argv[5][0] == '-' || value > UINT32_MAX) {
-            fprintf(stderr, "Invalid seed\n");
-            return EXIT_FAILURE;
-        }
-        // check for an invalid seed, if it is valid, it is stored in seed.
-        seed = (uint32_t)value;
+
+    if (loss < 0.0 || loss >= 1.0) {
+        fprintf(stderr, "Invalid loss rate\n");
+        return EXIT_FAILURE;
     }
+
+    printf("Filename: ");
+    fflush(stdout);
+
+    if (!fgets(filename,
+            sizeof(filename),
+            stdin))
+    {
+        return EXIT_FAILURE;
+    }
+
+    filename[strcspn(filename, "\r\n")] = '\0';
+
+    if (!*filename || strlen(filename) > MAX_DATA) {
+        fprintf(stderr,
+                "Filename must contain 1 to %d bytes\n",
+                MAX_DATA);
+        return EXIT_FAILURE;
+    }
+
     if (lossy_init(loss, seed) < 0) {
         perror("lossy_init");
         return EXIT_FAILURE;
     }
-    if (argc > 3) {
-        if (!*argv[3] || strlen(argv[3]) > MAX_DATA) {
-            fprintf(stderr, "Filename must contain 1 to %d bytes\n", MAX_DATA);
-            return EXIT_FAILURE;
-        }
-        strcpy(filename, argv[3]);
-    } else {
-        // client prompts user for input, reads from the keyboard
-        printf("Filename: ");
-        fflush(stdout);
-        if (!fgets(filename, sizeof(filename), stdin)) return EXIT_FAILURE;
-        filename[strcspn(filename, "\r\n")] = '\0';
-        if (!*filename || strlen(filename) > MAX_DATA) {
-            fprintf(stderr, "Filename must contain 1 to %d bytes\n", MAX_DATA);
-            return EXIT_FAILURE;
-        }
-    }
+
     struct addrinfo hints = {0}, *peer = NULL;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
@@ -212,11 +208,11 @@ int main(int argc, char **argv)
                 expected = (uint16_t)(expected + 1);
                 deadline = now_ms() + IDLE_MS;
                 // state is updated after packet is accepted
-                printf("DATA %u accepted (%u bytes)\n", pkt.seq, pkt.count);
+                printf("DATA %u received with %u data bytes\n", pkt.seq, pkt.count);
             } else {
                 // duplicate and out of order data is discarded, last cumulative ACK sent again
                 ++discarded;
-                printf("DATA %u discarded\n", pkt.seq);
+                printf("DATA %u discarded; expected packet %u\n", pkt.seq, expected);
             }
             ack.seq = last_ack;
         } else if (pkt.type == EOT && pkt.count == 0) {
@@ -228,7 +224,7 @@ int main(int argc, char **argv)
                 }
                 lingering = 1;
                 eot_seq = pkt.seq;
-                deadline = now_ms() + LINGER_MS;
+                deadline = now_ms() + (2 * timeout_ms);
                 // records EOT sequence, and waits for 5 seconds (linger period)
                 printf("EOT %u received; lingering for retransmissions\n", pkt.seq);
             }
