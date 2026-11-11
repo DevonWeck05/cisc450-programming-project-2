@@ -195,9 +195,7 @@ int main(int argc, char **argv) {
                 exit(EXIT_FAILURE);
             }
 
-            printf("DATA %u sent with %u data bytes\n",
-                packets[next_seq].seq,
-                packets[next_seq].count);
+            printf("DATA %u sent with %u data bytes\n", packets[next_seq].seq, packets[next_seq].count);
 
             next_seq++;
         }

@@ -193,6 +193,7 @@ int main(int argc, char **argv) {
         packet_t ack = {0};
         ack.type = ACK;
         ack.seq = last_ack;
+        int resent_ack = 0;
         // necessary for GBN ACKing, prepares ACK for last data packet
         if (pkt.type == DATA) {
             if (!lingering && pkt.seq == expected) {
@@ -213,6 +214,7 @@ int main(int argc, char **argv) {
                 // duplicate and out of order data is discarded, last cumulative ACK sent again
                 ++discarded;
                 printf("DATA %u discarded; expected packet %u\n", pkt.seq, expected);
+                resent_ack = 1;
             }
             ack.seq = last_ack;
         } else if (pkt.type == EOT && pkt.count == 0) {
@@ -225,12 +227,15 @@ int main(int argc, char **argv) {
                 lingering = 1;
                 eot_seq = pkt.seq;
                 deadline = now_ms() + (2 * timeout_ms);
-                // records EOT sequence, and waits for 5 seconds (linger period)
-                printf("EOT %u received; lingering for retransmissions\n", pkt.seq);
+                printf("EOT %u received\n", pkt.seq);
+            } else if (lingering && pkt.seq == eot_seq) {
+                deadline = now_ms() + (2 * timeout_ms);
+                printf("EOT %u received again\n", pkt.seq);
+            } else {
+                continue;
             }
-            if (lingering && pkt.seq == eot_seq) ack.seq = eot_seq;
-            else ++discarded;
-            // accepted EOT and copies of it receive the same ACK, in case EOT ACK gets or has been lost
+            ack.seq = eot_seq;
+            // Accepted EOTs and their duplicates receive the same ACK.
         } else {
             // other packet types are simply discarded
             ++discarded;
@@ -238,11 +243,11 @@ int main(int argc, char **argv) {
         }
         if (send_packet(fd, peer->ai_addr, peer->ai_addrlen, &ack) < 0) break;
         // sends the ACK
-        printf("ACK %u sent\n", ack.seq);
+        printf("ACK %u %s\n", ack.seq, resent_ack ? "resent" : "sent");
     }
-    printf("Accepted data packets: %llu\nDiscarded packets: %llu\nBytes written: %llu\n",
-           accepted, discarded, bytes);
-           // printing the counters after ACK is sent
+    printf("Number of data packets accepted: %llu\n", accepted);
+    printf("Number of data packets discarded: %llu\n", discarded);
+    printf("Total number of data bytes written: %llu\n", bytes);
 cleanup:
     if (fclose(out) == EOF) {
         perror("fclose");
