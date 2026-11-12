@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
     printf("Number of data packets accepted: %llu\n", accepted);
     printf("Number of data packets discarded: %llu\n", discarded);
     printf("Total number of data bytes written: %llu\n", bytes);
-    
+
 cleanup:
     if (out && fclose(out) == EOF) {
         perror("fclose");
