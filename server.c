@@ -183,6 +183,12 @@ int main(int argc, char **argv) {
         packet_count++;
         next_seq++;
     }
+    if (ferror(fp)) {
+        fprintf(stderr, "Error reading requested file\n");
+        if (fclose(fp) == EOF) perror("fclose");
+        close(sockfd);
+        return EXIT_FAILURE;
+    }
 
     // reset base and next_seq for packet sending loop
     base = 1;
@@ -502,7 +508,11 @@ int main(int argc, char **argv) {
     printf("Total number of original data bytes: %d\n", original_bytes);
     printf("Number of timeouts: %d\n", timeouts);
 
-    fclose(fp);
+    if (fclose(fp) == EOF) {
+        perror("fclose");
+        close(sockfd);
+        return EXIT_FAILURE;
+    }
     close(sockfd);
 
     return 0;
