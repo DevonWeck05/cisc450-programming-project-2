@@ -20,17 +20,14 @@
 #include "lossy.h"
 
 // checks whether a packet came from the requesting client
-static int same_peer(const struct sockaddr_in *left,
-                     const struct sockaddr_in *right)
-{
+static int same_peer(const struct sockaddr_in *left, const struct sockaddr_in *right) {
     return left->sin_family == right->sin_family &&
            left->sin_port == right->sin_port &&
            left->sin_addr.s_addr == right->sin_addr.s_addr;
 }
 
 // gets the current monotonic time in milliseconds
-static int monotonic_ms(long long *milliseconds)
-{
+static int monotonic_ms(long long *milliseconds) {
     struct timespec current;
     if (clock_gettime(CLOCK_MONOTONIC, &current) < 0) return -1;
 
